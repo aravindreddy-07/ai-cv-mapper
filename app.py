@@ -1,12 +1,9 @@
 import streamlit as st
 import re
-import json
 from docx import Document
 from docxtpl import DocxTemplate
 import PyPDF2
 import io
-import anthropic
-import os
 
 st.set_page_config(page_title="AI CV Mapper", page_icon="📄", layout="wide")
 
@@ -26,42 +23,86 @@ def extract_text_from_docx(docx_file):
         text += para.text + "\n"
     return text
 
-def parse_cv_with_ai(cv_text, api_key):
-    """Use Claude AI to parse CV and extract structured data"""
-    client = anthropic.Anthropic(api_key=api_key)
+def parse_cv_with_rules(cv_text):
+    """Use rule-based parsing to extract CV data (FREE - no API needed)"""
+    data = {
+        'name': '',
+        'email': '',
+        'phone': '',
+        'address': '',
+        'summary': '',
+        'education': [],
+        'experience': [],
+        'skills': [],
+        'certifications': [],
+        'projects': []
+    }
     
-    prompt = f"""Extract the following information from this CV and return ONLY a valid JSON object with these exact keys:
-    - name
-    - email
-    - phone
-    - address
-    - summary
-    - education (as a list of strings)
-    - experience (as a list of strings)
-    - skills (as a list of strings)
-    - certifications (as a list of strings)
-    - projects (as a list of strings)
-
-    CV Content:
-    {cv_text}
-
-    Return ONLY the JSON object, no other text."""
+    lines = cv_text.split('\n')
     
-    message = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=2000,
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
+    # Extract email
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    for line in lines:
+        email_match = re.search(email_pattern, line)
+        if email_match:
+            data['email'] = email_match.group()
+            break
     
-    response_text = message.content[0].text
+    # Extract phone
+    phone_patterns = [
+        r'\+?\d{1,3}[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}',
+        r'\d{10}',
+        r'\(\d{3}\)\s*\d{3}-\d{4}'
+    ]
+    for line in lines:
+        for pattern in phone_patterns:
+            phone_match = re.search(pattern, line)
+            if phone_match:
+                data['phone'] = phone_match.group()
+                break
+        if data['phone']:
+            break
     
-    # Extract JSON from response
-    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-    if json_match:
-        return json.loads(json_match.group())
-    return json.loads(response_text)
+    # Extract name (usually first non-empty line or line before email/phone)
+    for i, line in enumerate(lines[:10]):
+        line = line.strip()
+        if line and len(line.split()) <= 4 and not re.search(email_pattern, line) and len(line) > 3:
+            if not any(char.isdigit() for char in line):
+                data['name'] = line
+                break
+    
+    # Extract sections
+    current_section = None
+    section_keywords = {
+        'education': ['education', 'academic', 'qualification', 'degree'],
+        'experience': ['experience', 'employment', 'work history', 'professional'],
+        'skills': ['skills', 'technical skills', 'competencies'],
+        'certifications': ['certification', 'certificates', 'licenses'],
+        'projects': ['projects', 'portfolio'],
+        'summary': ['summary', 'objective', 'profile', 'about']
+    }
+    
+    for line in lines:
+        line_lower = line.lower().strip()
+        
+        # Check if line is a section header
+        for section, keywords in section_keywords.items():
+            if any(keyword in line_lower for keyword in keywords) and len(line.split()) <= 4:
+                current_section = section
+                break
+        else:
+            # Add content to current section
+            if current_section and line.strip():
+                if current_section == 'summary':
+                    data['summary'] += line.strip() + ' '
+                elif isinstance(data[current_section], list):
+                    if line.strip() and len(line.strip()) > 10:
+                        data[current_section].append(line.strip())
+    
+    # Clean up summary
+    data['summary'] = data['summary'].strip()
+    
+    return data
 
 def fill_template(template_file, data):
     """Fill DOCX template with extracted data"""
@@ -84,16 +125,9 @@ def fill_template(template_file, data):
     return output
 
 def main():
-    st.title("🤖 AI CV Mapper Agent")
+    st.title("🤖 AI CV Mapper Agent (FREE Version)")
     st.markdown("**Automatically extract content from your old CV and populate a new template**")
-    
-    st.sidebar.header("⚙️ Configuration")
-    api_key = st.sidebar.text_input("Anthropic API Key", type="password", help="Get your API key from console.anthropic.com")
-    
-    if not api_key:
-        st.warning("⚠️ Please enter your Anthropic API key in the sidebar to continue.")
-        st.info("Don't have an API key? Get one at: https://console.anthropic.com/")
-        return
+    st.info("✨ This version uses smart rule-based parsing - NO API KEY NEEDED!")
     
     col1, col2 = st.columns(2)
     
@@ -139,10 +173,10 @@ def main():
             
             st.info("✓ Extracted text from old CV")
             
-            # Parse with AI
+            # Parse with rules
             try:
-                parsed_data = parse_cv_with_ai(cv_text, api_key)
-                st.info("✓ Parsed CV with AI")
+                parsed_data = parse_cv_with_rules(cv_text)
+                st.info("✓ Parsed CV with intelligent rules")
                 
                 # Show extracted data
                 with st.expander("📋 View Extracted Data"):
