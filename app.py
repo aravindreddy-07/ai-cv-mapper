@@ -24,7 +24,7 @@ def extract_text_from_docx(docx_file):
     return text
 
 def parse_cv_with_rules(cv_text):
-    """Use rule-based parsing to extract CV data (FREE - no API needed)"""
+    """Use enhanced rule-based parsing to extract CV data (FREE - no API needed)"""
     data = {
         'name': '',
         'email': '',
@@ -38,69 +38,131 @@ def parse_cv_with_rules(cv_text):
         'projects': []
     }
     
-    lines = cv_text.split('\n')
+    lines = [line.strip() for line in cv_text.split('\n') if line.strip()]
+    text_lower = cv_text.lower()
     
-    # Extract email
-    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-    for line in lines:
-        email_match = re.search(email_pattern, line)
-        if email_match:
-            data['email'] = email_match.group()
+    # Extract email with multiple patterns
+    email_patterns = [
+        r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    ]
+    for pattern in email_patterns:
+        email_matches = re.findall(pattern, cv_text)
+        if email_matches:
+            data['email'] = email_matches[0]
             break
     
-    # Extract phone
+    # Extract phone with enhanced patterns
     phone_patterns = [
         r'\+?\d{1,3}[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}',
+        r'\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}',
+        r'\d{3}[\s.-]\d{3}[\s.-]\d{4}',
         r'\d{10}',
-        r'\(\d{3}\)\s*\d{3}-\d{4}'
+        r'\+\d{11,}'
     ]
-    for line in lines:
-        for pattern in phone_patterns:
-            phone_match = re.search(pattern, line)
-            if phone_match:
-                data['phone'] = phone_match.group()
-                break
-        if data['phone']:
+    for pattern in phone_patterns:
+        phone_matches = re.findall(pattern, cv_text)
+        if phone_matches:
+            data['phone'] = phone_matches[0]
             break
     
-    # Extract name (usually first non-empty line or line before email/phone)
-    for i, line in enumerate(lines[:10]):
-        line = line.strip()
-        if line and len(line.split()) <= 4 and not re.search(email_pattern, line) and len(line) > 3:
-            if not any(char.isdigit() for char in line):
-                data['name'] = line
+    # Extract name (improved logic)
+    # Look for name patterns in first few lines
+    for i, line in enumerate(lines[:8]):
+        line_clean = line.strip()
+        # Skip lines with email or phone
+        if any(char in line_clean for char in ['@', '(', ')', '+']):
+            continue
+        # Look for lines that could be names
+        if (len(line_clean.split()) <= 4 and 
+            len(line_clean) > 5 and 
+            len(line_clean) < 50 and
+            not any(keyword in line_clean.lower() for keyword in ['address', 'phone', 'email', 'cv', 'resume', 'curriculum'])):
+            # Check if it looks like a name (mostly letters)
+            if re.match(r'^[A-Za-z\s.,-]+$', line_clean):
+                data['name'] = line_clean
                 break
     
-    # Extract sections
+    # Extract sections with improved logic
     current_section = None
+    section_content = {}
+    
+    # Define section keywords with variations
     section_keywords = {
-        'education': ['education', 'academic', 'qualification', 'degree'],
-        'experience': ['experience', 'employment', 'work history', 'professional'],
-        'skills': ['skills', 'technical skills', 'competencies'],
-        'certifications': ['certification', 'certificates', 'licenses'],
-        'projects': ['projects', 'portfolio'],
-        'summary': ['summary', 'objective', 'profile', 'about']
+        'summary': ['summary', 'objective', 'profile', 'about', 'overview', 'introduction'],
+        'education': ['education', 'academic', 'qualification', 'degree', 'university', 'school', 'college'],
+        'experience': ['experience', 'employment', 'work', 'career', 'professional', 'job', 'position'],
+        'skills': ['skills', 'technical', 'competencies', 'expertise', 'technologies', 'abilities'],
+        'certifications': ['certification', 'certificates', 'licenses', 'awards', 'achievements'],
+        'projects': ['projects', 'portfolio', 'work samples', 'personal projects']
     }
     
-    for line in lines:
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         line_lower = line.lower().strip()
         
-        # Check if line is a section header
+        # Check if this line is a section header
+        detected_section = None
         for section, keywords in section_keywords.items():
-            if any(keyword in line_lower for keyword in keywords) and len(line.split()) <= 4:
-                current_section = section
+            for keyword in keywords:
+                if (keyword in line_lower and 
+                    len(line.split()) <= 5 and
+                    len(line) < 100):
+                    detected_section = section
+                    break
+            if detected_section:
                 break
-        else:
-            # Add content to current section
-            if current_section and line.strip():
-                if current_section == 'summary':
-                    data['summary'] += line.strip() + ' '
-                elif isinstance(data[current_section], list):
-                    if line.strip() and len(line.strip()) > 10:
-                        data[current_section].append(line.strip())
+        
+        if detected_section:
+            current_section = detected_section
+            section_content[current_section] = []
+            i += 1
+            continue
+        
+        # Add content to current section
+        if current_section and line.strip():
+            # Skip very short lines and lines that look like headers
+            if len(line.strip()) > 5 and not line.strip().endswith(':'):
+                section_content[current_section].append(line.strip())
+        
+        i += 1
     
-    # Clean up summary
-    data['summary'] = data['summary'].strip()
+    # Process sections and clean up
+    for section, content in section_content.items():
+        if section == 'summary':
+            # Join summary lines into a paragraph
+            data['summary'] = ' '.join(content[:3])  # Take first 3 lines for summary
+        elif section in ['education', 'experience', 'skills', 'certifications', 'projects']:
+            # Clean and filter content
+            cleaned_content = []
+            for item in content:
+                if len(item) > 10 and len(item) < 500:  # Reasonable length
+                    cleaned_content.append(item)
+            data[section] = cleaned_content[:10]  # Limit to 10 items per section
+    
+    # Fallback: if no sections found, try to extract from raw text
+    if not any(data[key] for key in ['education', 'experience', 'skills']):
+        # Simple fallback extraction
+        sentences = [s.strip() for s in cv_text.split('.') if len(s.strip()) > 20]
+        data['summary'] = sentences[0] if sentences else 'Professional with relevant experience'
+        
+        # Look for common patterns
+        for sentence in sentences[:20]:
+            sentence_lower = sentence.lower()
+            if any(word in sentence_lower for word in ['university', 'degree', 'graduated', 'bachelor', 'master']):
+                data['education'].append(sentence[:200])
+            elif any(word in sentence_lower for word in ['worked', 'employed', 'company', 'role', 'position']):
+                data['experience'].append(sentence[:200])
+            elif any(word in sentence_lower for word in ['skill', 'proficient', 'experience with', 'knowledge']):
+                data['skills'].append(sentence[:200])
+    
+    # Ensure all fields have some content
+    if not data['name'] and data['email']:
+        data['name'] = data['email'].split('@')[0].replace('.', ' ').title()
+    
+    if not data['summary']:
+        data['summary'] = 'Experienced professional with a strong background in their field.'
     
     return data
 
@@ -111,10 +173,13 @@ def fill_template(template_file, data):
     # Convert lists to formatted strings
     context = {}
     for key, value in data.items():
-        if isinstance(value, list):
-            context[key] = "\n".join([f"• {item}" for item in value]) if value else "N/A"
+        if isinstance(value, list) and value:
+            # Format list items with bullet points
+            context[key] = "\n".join([f"• {item}" for item in value])
+        elif isinstance(value, list):
+            context[key] = "No information available"
         else:
-            context[key] = value if value else "N/A"
+            context[key] = value if value else "Not specified"
     
     doc.render(context)
     
@@ -127,7 +192,7 @@ def fill_template(template_file, data):
 def main():
     st.title("🤖 AI CV Mapper Agent (FREE Version)")
     st.markdown("**Automatically extract content from your old CV and populate a new template**")
-    st.info("✨ This version uses smart rule-based parsing - NO API KEY NEEDED!")
+    st.info("✨ This version uses enhanced smart parsing - NO API KEY NEEDED!")
     
     col1, col2 = st.columns(2)
     
@@ -173,10 +238,10 @@ def main():
             
             st.info("✓ Extracted text from old CV")
             
-            # Parse with rules
+            # Parse with enhanced rules
             try:
                 parsed_data = parse_cv_with_rules(cv_text)
-                st.info("✓ Parsed CV with intelligent rules")
+                st.info("✓ Parsed CV with enhanced intelligent rules")
                 
                 # Show extracted data
                 with st.expander("📋 View Extracted Data"):
